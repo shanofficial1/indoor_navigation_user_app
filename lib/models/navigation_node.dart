@@ -18,7 +18,7 @@ class NavigationNode {
         (json['x'] as num).toDouble(),
         (json['y'] as num).toDouble(),
       ),
-      roomIds: List<String>.from(json['rooms'] ?? []),
+      roomIds: List<String>.from(json['rooms'] ?? json['roomIds'] ?? []),
     );
   }
 }

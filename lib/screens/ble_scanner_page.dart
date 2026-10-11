@@ -22,8 +22,11 @@ class BleScannerPage extends StatefulWidget {
 class _BleScannerPageState extends State<BleScannerPage> {
   final BleScannerService _scanner = BleScannerService();
 
-  final RssiFilterService _rssiFilter =
-      RssiFilterService(maxSamples: 10);
+ final RssiFilterService _rssiFilter =
+    RssiFilterService(
+  maxSamples: 10,
+  expirationTime: const Duration(seconds: 2),
+);
 StreamSubscription<bool>? _scanStateSubscription;
   StreamSubscription<List<ScanResult>>? _subscription;
   Timer? _uiTimer;
@@ -127,14 +130,16 @@ _scanStateSubscription =
     //
     // This does NOT create fake RSSI measurements.
     // It only refreshes "Updated X ms ago" every 100 ms.
-    _uiTimer = Timer.periodic(
-      const Duration(milliseconds: 100),
-      (_) {
-        if (mounted && _scanning) {
-          setState(() {});
-        }
-      },
-    );
+   _uiTimer = Timer.periodic(
+  const Duration(milliseconds: 100),
+  (_) {
+    if (mounted && _scanning) {
+      _removeExpiredBeacons();
+
+      setState(() {});
+    }
+  },
+);
   }
 
   Future<void> _startScan() async {
@@ -147,6 +152,9 @@ _scanStateSubscription =
       _liveRssi.clear();
       _filteredRssi.clear();
       _lastUpdate.clear();
+      _sampleCount.clear();
+_lastIntervalMs.clear();
+_lastSampleTimeUs.clear();
       _rssiFilter.clearAll();
     });
 
@@ -184,6 +192,44 @@ _scanStateSubscription =
       });
     }
   }
+
+void _removeExpiredBeacons() {
+  final now = DateTime.now();
+
+  final expiredMacs = <String>[];
+
+  for (final entry in _lastUpdate.entries) {
+    final age = now.difference(entry.value);
+
+    if (age > const Duration(seconds: 2)) {
+      expiredMacs.add(entry.key);
+    }
+  }
+
+  if (expiredMacs.isEmpty) {
+    return;
+  }
+
+  for (final mac in expiredMacs) {
+    _liveRssi.remove(mac);
+    _filteredRssi.remove(mac);
+    _lastUpdate.remove(mac);
+    _sampleCount.remove(mac);
+    _lastIntervalMs.remove(mac);
+    _lastSampleTimeUs.remove(mac);
+
+    _rssiFilter.clear(mac);
+
+    debugPrint(
+      'BEACON EXPIRED | MAC: $mac',
+    );
+  }
+
+  if (mounted) {
+    setState(() {});
+  }
+}
+
 
   @override
   void dispose() {

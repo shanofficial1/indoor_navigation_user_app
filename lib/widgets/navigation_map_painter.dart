@@ -1,19 +1,38 @@
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../controllers/direction_beam_controller.dart';
 import '../models/building_config.dart';
-
 
 class NavigationMapPainter extends CustomPainter {
   final BuildingConfig config;
   final List<String> route;
-final String? currentNodeId;
-final Offset? currentPosition;
-NavigationMapPainter({
-  required this.config,
-  required this.route,
-  this.currentNodeId,
-  this.currentPosition,
-});
+
+  /// Route geometry following the corridor polylines (map-pixel coordinates).
+  /// When null the route is drawn as straight node-to-node lines (old look).
+  final List<Offset>? routePoints;
+  final String? currentNodeId;
+  final Offset? currentPosition;
+  final Color markerColor;
+
+  /// Facing direction beam. Also the repaint source: when the heading changes
+  /// only this overlay repaints, the widget tree is not rebuilt.
+  final DirectionBeamController? beam;
+
+  NavigationMapPainter({
+    required this.config,
+    required this.route,
+    this.routePoints,
+    this.currentNodeId,
+    this.currentPosition,
+    this.markerColor = Colors.blue,
+    this.beam,
+  }) : super(repaint: beam);
+
+  /// Beam length in canvas pixels (same units as the 6 px marker).
+  static const double _beamLength = 40.0;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -27,7 +46,8 @@ NavigationMapPainter({
       ..color = Colors.blue
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
     final nodePaint = Paint()
       ..color = Colors.red
@@ -46,66 +66,92 @@ NavigationMapPainter({
     }
 
     // Draw only the calculated route.
-    for (int i = 0; i < route.length - 1; i++) {
-      final fromNode = config.nodes.firstWhere(
-        (node) => node.id == route[i],
-      );
+    final pts = routePoints;
+    if (pts != null && pts.length >= 2) {
+      final path = Path()..moveTo(convert(pts.first).dx, convert(pts.first).dy);
+      for (var i = 1; i < pts.length; i++) {
+        final p = convert(pts[i]);
+        path.lineTo(p.dx, p.dy);
+      }
+      canvas.drawPath(path, pathPaint);
+    } else {
+      for (int i = 0; i < route.length - 1; i++) {
+        final fromNode = config.nodeById[route[i]];
+        final toNode = config.nodeById[route[i + 1]];
+        if (fromNode == null || toNode == null) continue;
 
-      final toNode = config.nodes.firstWhere(
-        (node) => node.id == route[i + 1],
-      );
-
-      final from = convert(fromNode.position);
-      final to = convert(toNode.position);
-
-      canvas.drawLine(from, to, pathPaint);
+        canvas.drawLine(
+          convert(fromNode.position),
+          convert(toNode.position),
+          pathPaint,
+        );
+      }
     }
 
     // Draw nodes.
     for (final node in config.nodes) {
       final position = convert(node.position);
 
-      canvas.drawCircle(
-        position,
-        2,
-        nodePaint,
-      );
+      canvas.drawCircle(position, 2, nodePaint);
+      canvas.drawCircle(position, 2, nodeBorderPaint);
+    }
+
+    // User marker.
+    if (currentPosition != null) {
+      final point = convert(currentPosition!);
+
+      // Direction beam, drawn UNDER the marker and anchored at its centre.
+      // It lives in the same canvas as the marker, which sits inside the
+      // InteractiveViewer child, so it follows zoom and pan automatically.
+      final b = beam;
+      if (b != null && b.visible) {
+        // Bearing 0 = map up, clockwise  ->  canvas angle 0 = +x, clockwise.
+        final centre = b.bearingRad - math.pi / 2;
+        final half = b.spreadRad / 2;
+        final rect = Rect.fromCircle(center: point, radius: _beamLength);
+        final cone = Path()
+          ..moveTo(point.dx, point.dy)
+          ..arcTo(rect, centre - half, 2 * half, false)
+          ..close();
+        final shader = RadialGradient(
+          colors: [
+            markerColor.withValues(alpha: 0.65 * b.opacity),
+            markerColor.withValues(alpha: 0.0),
+          ],
+        ).createShader(rect);
+        canvas.drawPath(
+          cone,
+          Paint()
+            ..shader = shader
+            ..style = PaintingStyle.fill,
+        );
+      }
 
       canvas.drawCircle(
-        position,
-        2,
-        nodeBorderPaint,
+        point,
+        9,
+        Paint()
+          ..color = markerColor.withValues(alpha: 0.2)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        point,
+        6,
+        Paint()
+          ..color = markerColor
+          ..style = PaintingStyle.fill,
       );
     }
-if (currentPosition != null) {
-  final x =
-      currentPosition!.dx * scaleX;
-
-  final y =
-      currentPosition!.dy * scaleY;
-
-  final point =
-      Offset(x, y);
-
-
-  final bluePaint = Paint()
-    ..color = Colors.blue
-    ..style = PaintingStyle.fill;
-
-
-  canvas.drawCircle(
-    point,
-    6,
-    bluePaint,
-  );
-}
   }
 
   @override
-  bool shouldRepaint(
-    covariant NavigationMapPainter oldDelegate,
-  ) {
+  bool shouldRepaint(covariant NavigationMapPainter oldDelegate) {
     return oldDelegate.config != config ||
-        oldDelegate.route != route;
+        !listEquals(oldDelegate.route, route) ||
+        !listEquals(oldDelegate.routePoints, routePoints) ||
+        oldDelegate.currentNodeId != currentNodeId ||
+        oldDelegate.currentPosition != currentPosition ||
+        oldDelegate.markerColor != markerColor ||
+        oldDelegate.beam != beam;
   }
 }
