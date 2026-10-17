@@ -62,6 +62,21 @@ class BlePositionEstimator {
       final a = graph.anchorForBeacon(b);
       if (a != null) {
         _anchors[b.id] = a;
+        // A beacon linked to a node wins over its own x/y. If the two disagree
+        // the whole range model is shifted by that amount - warn loudly.
+        if (b.nodeId != null && b.hasPosition) {
+          final pr = graph.project(b.position);
+          if (pr != null) {
+            final off = graph.graphDistance(a, pr.location);
+            if (off > 1.0) {
+              PosLog.d(
+                'BLE',
+                () => 'beacon ${b.id}: node ${b.nodeId} is ${off.toStringAsFixed(1)} m '
+                    'from the beacon x/y on the graph - check the config',
+              );
+            }
+          }
+        }
       } else {
         PosLog.d('BLE', () => 'beacon ${b.id} has no graph anchor - unusable');
       }

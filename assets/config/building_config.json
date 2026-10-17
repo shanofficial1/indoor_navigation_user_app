@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "debug": {
+  "recording": true
+},
   "building": {
     "id": "BUILDING_01",
     "name": "Main Building",

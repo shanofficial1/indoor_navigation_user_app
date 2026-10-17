@@ -612,7 +612,11 @@ class MotionConfig {
 // ----------------------------------------------------------------------------
 
 class DebugConfig {
-  const DebugConfig({this.panelEnabled = false, this.logging = false});
+  const DebugConfig({
+    this.panelEnabled = false,
+    this.logging = false,
+    this.recording = false,
+  });
 
   /// Show the diagnostics panel when the app starts.
   final bool panelEnabled;
@@ -620,11 +624,16 @@ class DebugConfig {
   /// Print structured [BLE]/[MOTION]/[FUSION]/[POSITION] logs.
   final bool logging;
 
+  /// Emit one compact JSON line per fusion tick (`[REC] {...}` in logcat) so a
+  /// walk can be replayed offline with ReplayRunner and the parameters tuned.
+  final bool recording;
+
   factory DebugConfig.fromJson(Map<String, dynamic>? j) {
     const d = DebugConfig();
     return DebugConfig(
       panelEnabled: _b(j, 'enabled', d.panelEnabled),
       logging: _b(j, 'logging', d.logging),
+      recording: _b(j, 'recording', d.recording),
     );
   }
 }

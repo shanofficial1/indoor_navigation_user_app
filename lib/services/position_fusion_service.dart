@@ -114,6 +114,12 @@ class PositionFusionService {
   static const double _contextMinProgressRatio = 0.2;
   static const double _contextPenalty = 0.3;
 
+  // ---- BLE-trend direction fallback (used when no trustworthy heading) -------
+  // Thresholds are starting values: tune them on recorded walks.
+  static const double _trendMinNetMeters = 2.0;
+  static const int _trendMinSamples = 3;
+  static const int _trendMinSpanMs = 2500;
+
   // ---- exposed ---------------------------------------------------------------
   GraphLocation? get location => _loc;
 
@@ -179,7 +185,7 @@ class PositionFusionService {
     // ---- 2. PDR prediction -----------------------------------------------
     if (stepDistanceMeters > 0 && !motion.shakeSuspected) {
       final dist = stepDistanceMeters * _contextFactor(now);
-      _dir = _decideDirection(motion, routeNext);
+      _dir = _decideDirection(motion, routeNext, now);
       final res = graph.moveAlong(
         _loc!,
         dist,
@@ -340,9 +346,14 @@ class PositionFusionService {
     return wrapAngle(m.headingRad! + off);
   }
 
-  /// +1 / -1 along the current edge. Heading first, then the active route,
-  /// else keep going the way we were.
-  int _decideDirection(MotionSnapshot motion, Map<String, String> routeNext) {
+  /// +1 / -1 along the current edge. Heading first, then the direction the
+  /// recent BLE fixes are actually moving, then the active route, else keep
+  /// going the way we were.
+  int _decideDirection(
+    MotionSnapshot motion,
+    Map<String, String> routeNext,
+    DateTime now,
+  ) {
     final loc = _loc!;
     final e = graph.edges[loc.edge];
     final hb = _headingBearing(motion);
@@ -351,9 +362,50 @@ class PositionFusionService {
       if (c > _motion.heading.directionHysteresis) return 1;
       if (c < -_motion.heading.directionHysteresis) return -1;
     }
+    // No usable compass (map offset unknown, magnetometer disturbed, ...):
+    // evidence of real movement beats a guess from the route.
+    final trend = _bleTrendDirection(now);
+    if (trend != null) return trend;
     if (routeNext[e.fromId] == e.toId) return 1;
     if (routeNext[e.toId] == e.fromId) return -1;
     return _dir;
+  }
+
+  /// +1 / -1 if recent BLE fixes on the CURRENT edge show clear net progress
+  /// towards its `to` / `from` end, else null (not enough evidence).
+  /// Uses the least-squares slope so one noisy fix cannot flip the direction.
+  int? _bleTrendDirection(DateTime now) {
+    final loc = _loc;
+    if (loc == null) return null;
+    final cutoff = now.subtract(const Duration(milliseconds: _contextWindowMs));
+    final pts = _fixWindow
+        .where((f) => f.time.isAfter(cutoff) && f.loc.edge == loc.edge)
+        .toList();
+    if (pts.length < _trendMinSamples) return null;
+
+    final t0 = pts.first.time;
+    final spanMs = pts.last.time.difference(t0).inMilliseconds;
+    if (spanMs < _trendMinSpanMs) return null;
+
+    var sx = 0.0;
+    var sy = 0.0;
+    var sxx = 0.0;
+    var sxy = 0.0;
+    for (final p in pts) {
+      final x = p.time.difference(t0).inMilliseconds / 1000.0;
+      final y = p.loc.distance;
+      sx += x;
+      sy += y;
+      sxx += x * x;
+      sxy += x * y;
+    }
+    final n = pts.length.toDouble();
+    final denom = n * sxx - sx * sx;
+    if (denom.abs() < 1e-9) return null;
+    final slope = (n * sxy - sx * sy) / denom; // m/s towards the `to` end
+    final net = slope * (spanMs / 1000.0);
+    if (net.abs() < _trendMinNetMeters) return null;
+    return net > 0 ? 1 : -1;
   }
 
   /// Learns the map-vs-compass offset: while walking, if BLE fixes progress

@@ -5,6 +5,7 @@ import '../models/building_config.dart';
 import '../models/motion_state.dart';
 import '../models/positioning_state.dart';
 import '../utils/pos_log.dart';
+import '../utils/tick_recorder.dart';
 import 'ble_position_estimator.dart';
 import 'ble_service.dart';
 import 'graph_position_service.dart';
@@ -31,6 +32,10 @@ class PositioningService {
         ble = ble ?? BleService(config: config, clock: clock),
         motion = motion ?? MotionService(config: config.positioning.motion),
         pdr = PdrService(config.positioning.motion) {
+    // Enable logging BEFORE the estimator is built, so its start-up warnings
+    // (e.g. "beacon has no graph anchor") are actually printed.
+    PosLog.enabled = config.positioning.debug.logging;
+    recorder = config.positioning.debug.recording ? TickRecorder() : null;
     estimator = BlePositionEstimator(graph: graph, config: config);
     fusion = PositionFusionService(graph: graph, config: config);
   }
@@ -44,6 +49,9 @@ class PositioningService {
   final PdrService pdr;
   late final BlePositionEstimator estimator;
   late final PositionFusionService fusion;
+
+  /// Non-null when `debug.recording` is on: logs every tick for offline replay.
+  late final TickRecorder? recorder;
 
   final StreamController<PositioningSnapshot> _controller =
       StreamController<PositioningSnapshot>.broadcast();
@@ -118,6 +126,16 @@ class PositioningService {
       motion: motionSnap,
       stepDistanceMeters: stepMeters,
       routeNext: _routeNext,
+    );
+
+    recorder?.record(
+      now: now,
+      measurements: measurements,
+      motion: motionSnap,
+      stepMeters: stepMeters,
+      routeNext: _routeNext,
+      fix: fix,
+      out: out,
     );
 
     final loc = out.location;
